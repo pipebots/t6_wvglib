@@ -292,7 +292,8 @@ def calc_mode_weight(wvg_width: float, wvg_height: float,
 
 
 def calc_electric_field(freq: float, distance: float,
-                        er_width: complex, er_height: complex,
+                        permittivity_width: complex,
+                        permittivity_height: complex,
                         wvg_width: float, wvg_height: float,
                         tx_x: float, tx_y: float, rx_x: float, rx_y: float,
                         mode_n_max: int, mode_m_max: int) -> float:
@@ -315,9 +316,9 @@ def calc_electric_field(freq: float, distance: float,
               Units are GHz.
         distance: A `float` with how far along the waveguide the receiver is.
                   Units are metres.
-        er_width: A `complex` value of the relative permittivity of
+        permittivity_width: A `complex` value of the relative permittivity of
                   the material along the top and bottom walls of the waveguide.
-        er_height: A `complex` value of the relative permittivity of
+        permittivity_height: A `complex` value of the relative permittivity of
                    the material along the side walls of the waveguide.
         wvg_width: A `float` with the width of the waveguide which is being
                    checked. Units are metres.
@@ -360,8 +361,8 @@ def calc_electric_field(freq: float, distance: float,
             )
 
             mode_alpha = calc_attenuation_constant(
-                freq, er_width, er_height, wvg_width, wvg_height,
-                mode_n, mode_m
+                freq, permittivity_width, permittivity_height, wvg_width,
+                wvg_height, mode_n, mode_m
             )
 
             mode_beta = calc_phase_constant(

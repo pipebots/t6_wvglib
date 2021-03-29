@@ -197,7 +197,7 @@ def calc_phase_constant(freq: float, wvg_diameter: float, mode: str,
         mode_m: The `m` index of the mode of interest.
 
     Returns:
-        The attenuation constant in Np/m as a `float` number.
+        The phase constant in rad/m as a `float` number.
 
     Raises:
         RuntimeError: If a mode differen than TE or TM is specified and not
