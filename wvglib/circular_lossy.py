@@ -1,25 +1,220 @@
 """Electrically large lossy circular waveguide
 
-This suite of functions implements the approximate solutions for a lossy,
-air-filled circular waveguide embedded in a homogeneous medium. This solution
-is only valid for electrically large tunnels.
+This suite of functions implements both the approximate and the exact solutions
+for a lossy, air-filled circular waveguide embedded in a homogeneous medium.
+The approximate one is only valid for electrically large tunnels, which can be
+checked using this module as well. The exact solution works for any combination
+of waveguide size and wavelength.
 
-The formulas are based on the following paper:
+A major restriction currently is that the dielectric medium surrounding the
+waveguide is homogeneous. These solutions also do not support partially-filled
+waveguides. Unknown at this point whether they ever will.
 
-E. A. J. Marcatili and R. A. Schmeltzer,
+The formulas for the approximate solution are based on the following paper,
+and are pretty straightforward:
+
+[1] E. A. J. Marcatili and R. A. Schmeltzer,
 Hollow metallic and dielectric waveguides for long distance optical
 transmission and lasers,
 The Bell System Technical Journal, vol. 43, no. 4, pp. 1783–1809, Jul. 1964,
-doi: 10.1002/j.1538-7305.1964.tb04108.x.
+doi: 10.1002/j.1538-7305.1964.tb04108.x
+
+The formulas for the exact solution are based on the following papers, and
+unkile the approximate one are less straightforward, requiring numerical
+solutions and finding approximate roots:
+
+[2] D. G. Dudley and S. F. Mahmoud,
+Linear source in a circular tunnel,
+IEEE Transactions on Antennas and Propagation, vol. 54, no. 7, pp. 2034–2047,
+Jul. 2006, doi: 10.1109/TAP.2006.877195
+
+[3] C. L. Holloway, D. A. Hill, R. A. Dalke, and G. A. Hufford,
+Radio wave propagation characteristics in lossy circular waveguides such as
+tunnels, mine shafts, and boreholes,
+IEEE Transactions on Antennas and Propagation, vol. 48, no. 9, pp. 1354–1366,
+Sep. 2000, doi: 10.1109/8.898768
+
+[4] J. I. Glaser,
+Attenuation and Guidance of Modes on Hollow Dielectric Waveguides,
+IEEE Transactions on Microwave Theory and Techniques, vol. 17, no. 3,
+pp. 173–174, Mar. 1969, doi: 10.1109/TMTT.1969.1126923
+
+The steps to follow are:
+    1. Pick a mode
+    2. Estimate roots for that particular mode
+    3. Find exact roots for that particular mode
+    4. Derive propagation constant from exact roots
 """
 
 import warnings
+from typing import Tuple
 import numpy as np
 import scipy.special
 from scipy.constants import speed_of_light
 
 
 np.seterr(divide='raise')
+
+
+def estimate_roots_te(freq: float, wvg_diameter: float,
+                      real_permittivity: float, mode_m: int) -> complex:
+    wvg_radius = wvg_diameter / 2
+
+    try:
+        wavelength = speed_of_light / (freq * 1e9)
+    except ZeroDivisionError as error:
+        raise ZeroDivisionError('Frequency must be > 0'). \
+              with_traceback(error.__traceback__)
+
+    wave_number = 2 * np.pi / wavelength
+
+    imag_denom = wave_number * wvg_radius * np.sqrt(real_permittivity - 1)
+    root_multiplier = 1 + 1j / imag_denom
+
+    root_estimate = scipy.special.jn_zeros(1, mode_m)[-1]
+    root_estimate = root_estimate * root_multiplier
+
+    return root_estimate
+
+
+def estimate_roots_tm(freq: float, wvg_diameter: float,
+                      real_permittivity: float,
+                      mode_m: int) -> Tuple[complex, complex, bool]:
+    wvg_radius = wvg_diameter / 2
+
+    try:
+        wavelength = speed_of_light / (freq * 1e9)
+    except ZeroDivisionError as error:
+        raise ZeroDivisionError('Frequency must be > 0'). \
+              with_traceback(error.__traceback__)
+
+    wave_number = 2 * np.pi / wavelength
+
+    imag_denom = wave_number * wvg_radius * np.sqrt(real_permittivity - 1)
+
+    root_multiplier = 1 + (1j * real_permittivity / imag_denom)
+
+    root_estimate_1 = scipy.special.jn_zeros(1, mode_m)[-1]
+    root_estimate_1 = root_estimate_1 * root_multiplier
+
+    root_estimate_2 = scipy.special.jn_zeros(0, mode_m)[-1]
+    print(root_estimate_2)
+    root_limit = np.sqrt(imag_denom / real_permittivity)
+    print(root_limit)
+    root_limit_check = root_estimate_2 > (10 * root_limit)
+
+    root_estimate_2 += (
+        (1j * imag_denom) / (real_permittivity * root_estimate_2)
+    )
+
+    return (root_estimate_1, root_estimate_2, root_limit_check)
+
+
+def estimate_roots_hybrid(mode: str, mode_n: int, mode_m: int) -> float:
+    if 0 == mode_n or 0 == mode_m:
+        raise ValueError("Hybrid modes cannot have a zero index")
+
+    if "he" == mode.lower():
+        root_estimate = scipy.special.jn_zeros(mode_n-1, mode_m)[-1]
+    elif "eh" == mode.lower():
+        root_estimate = scipy.special.jn_zeros(mode_n+1, mode_m)[-1]
+    else:
+        raise ValueError("Mode should be either EH or HE")
+
+    return root_estimate
+
+
+def root_to_attn_const(freq: float, mode_wavelength: complex) -> complex:
+    try:
+        wavelength = speed_of_light / (freq * 1e9)
+    except ZeroDivisionError as error:
+        raise ZeroDivisionError('Frequency must be > 0'). \
+              with_traceback(error.__traceback__)
+
+    wave_number = 2 * np.pi / wavelength
+
+    attn_const = np.power(wave_number, 2) - np.power(mode_wavelength, 2)
+    attn_const = np.sqrt(attn_const)
+    attn_const *= 1j
+
+    return attn_const
+
+
+def modal_equation_te_tm(root_estimate: complex, freq: float,
+                         permittivity: complex, wvg_diameter: float,
+                         mode: str, mode_n: int = 0) -> complex:
+    if "tm" == mode.lower():
+        mode_multiplier = permittivity
+    elif "te" == mode.lower():
+        mode_multiplier = 1
+    else:
+        raise ValueError("Mode must be TE or TM")
+
+    wvg_radius = wvg_diameter / 2
+    wave_number = (2 * np.pi * freq * 1e9) / speed_of_light
+
+    lambda_1 = root_estimate / wvg_radius
+
+    lambda_2 = np.power(wave_number, 2) * (permittivity - 1)
+    lambda_2 += np.power(lambda_1, 2)
+    lambda_2 = np.sqrt(lambda_2)
+
+    lambda_ratio = lambda_1 / lambda_2
+
+    bessel_argument = lambda_1 * wvg_radius
+    hankel_argument = lambda_2 * wvg_radius
+
+    bessel_fraction = scipy.special.jvp(mode_n, bessel_argument)
+    bessel_fraction /= scipy.special.jv(mode_n, bessel_argument)
+
+    hankel_fraction = scipy.special.h2vp(mode_n, hankel_argument)
+    hankel_fraction /= scipy.special.hankel2(mode_n, hankel_argument)
+
+    result = bessel_fraction
+    result -= (mode_multiplier * lambda_ratio * hankel_fraction)
+
+    return result
+
+
+def modal_equation_eh_he(root_estimate: complex, freq: float,
+                         permittivity: complex, wvg_diameter: float,
+                         mode: str, mode_n: int = 1) -> complex:
+    if "he" != mode.lower() and "eh" != mode.lower():
+        raise ValueError("Mode must be TE or TM")
+
+    wvg_radius = wvg_diameter / 2
+    wave_number = (2 * np.pi * freq * 1e9) / speed_of_light
+
+    lambda_1 = root_estimate / wvg_radius
+
+    lambda_2 = np.power(wave_number, 2) * (permittivity - 1)
+    lambda_2 += np.power(lambda_1, 2)
+    lambda_2 = np.sqrt(lambda_2)
+
+    q1_multiplier_1 = mode_n / root_estimate
+
+    q1_multiplier_2 = root_estimate / (wave_number * wvg_radius)
+    q1_multiplier_2 = np.sqrt(1 - np.power(q1_multiplier_2, 2))
+
+    q1_multiplier_3 = 1 - np.power(lambda_1 / lambda_2, 2)
+
+    q1 = q1_multiplier_1 * q1_multiplier_2 * q1_multiplier_3
+
+    q2 = modal_equation_te_tm(
+        root_estimate, freq, permittivity, wvg_diameter, 'te', mode_n
+    )
+
+    q5 = modal_equation_te_tm(
+        root_estimate, freq, permittivity, wvg_diameter, 'tm', mode_n
+    )
+
+    result = np.power(q1, 2) - q2 * q5
+
+    return result
+
+
+def calc_attenuation_constant_exact():
+    pass
 
 
 def check_electrical_size(freq: float, wvg_diameter: float,
