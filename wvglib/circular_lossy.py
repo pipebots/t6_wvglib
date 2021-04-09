@@ -49,7 +49,9 @@ The steps to follow are:
 import warnings
 from typing import Tuple
 import numpy as np
+from numpy.lib.type_check import real
 import scipy.special
+from scipy.optimize import newton, brute, fmin
 from scipy.constants import speed_of_light
 
 
@@ -98,9 +100,9 @@ def estimate_roots_tm(freq: float, wvg_diameter: float,
     root_estimate_1 = root_estimate_1 * root_multiplier
 
     root_estimate_2 = scipy.special.jn_zeros(0, mode_m)[-1]
-    print(root_estimate_2)
+
     root_limit = np.sqrt(imag_denom / real_permittivity)
-    print(root_limit)
+
     root_limit_check = root_estimate_2 > (10 * root_limit)
 
     root_estimate_2 += (
@@ -124,7 +126,7 @@ def estimate_roots_hybrid(mode: str, mode_n: int, mode_m: int) -> float:
     return root_estimate
 
 
-def root_to_attn_const(freq: float, mode_wavelength: complex) -> complex:
+def root_to_prop_const(freq: float, mode_wavelength: complex) -> complex:
     try:
         wavelength = speed_of_light / (freq * 1e9)
     except ZeroDivisionError as error:
@@ -133,11 +135,11 @@ def root_to_attn_const(freq: float, mode_wavelength: complex) -> complex:
 
     wave_number = 2 * np.pi / wavelength
 
-    attn_const = np.power(wave_number, 2) - np.power(mode_wavelength, 2)
-    attn_const = np.sqrt(attn_const)
-    attn_const *= 1j
+    prop_const = np.power(wave_number, 2) - np.power(mode_wavelength, 2)
+    prop_const = np.sqrt(prop_const)
+    prop_const *= 1j
 
-    return attn_const
+    return prop_const
 
 
 def modal_equation_te_tm(root_estimate: complex, freq: float,
@@ -176,9 +178,9 @@ def modal_equation_te_tm(root_estimate: complex, freq: float,
     return result
 
 
-def modal_equation_eh_he(root_estimate: complex, freq: float,
-                         permittivity: complex, wvg_diameter: float,
-                         mode: str, mode_n: int = 1) -> complex:
+def modal_equation_hybrid(root_estimate: complex, freq: float,
+                          permittivity: complex, wvg_diameter: float,
+                          mode: str, mode_n: int = 1) -> complex:
     if "he" != mode.lower() and "eh" != mode.lower():
         raise ValueError("Mode must be TE or TM")
 
@@ -213,8 +215,92 @@ def modal_equation_eh_he(root_estimate: complex, freq: float,
     return result
 
 
-def calc_attenuation_constant_exact():
-    pass
+def calc_propagation_constant_exact(freq: float, wvg_diameter: float,
+                                    permittivity: complex, mode: str,
+                                    mode_n: int, mode_m: int,
+                                    imag_range_min: float = 0.2,
+                                    imag_range_max: float = 2.0) -> complex:
+    wvg_radius = wvg_diameter / 2.0
+
+    if "te" == mode.lower():
+        root_estimate = estimate_roots_te(freq, wvg_diameter,
+                                          permittivity.real, mode_m)
+
+        root_exact, root_result = newton(
+            modal_equation_te_tm,
+            x0=root_estimate,
+            args=(freq, permittivity, wvg_diameter, mode),
+            full_output=True
+        )
+
+    elif "tm" == mode.lower():
+        root_estimate_1, root_estimate_2, _ = estimate_roots_tm(
+            freq, wvg_diameter, permittivity.real, mode_m
+        )
+
+        root_exact, root_result = newton(
+            modal_equation_te_tm,
+            x0=root_estimate_1, x1=root_estimate_2,
+            args=(freq, permittivity, wvg_diameter, mode),
+            full_output=True
+        )
+
+    elif "eh" == mode.lower() or "he" == mode.lower():
+        root_estimate_real = estimate_roots_hybrid(mode, mode_n, mode_m)
+
+        root_estimate_real_range = np.linspace(
+            root_estimate_real*0.9, root_estimate_real*1.1,
+            200
+        )
+
+        root_estimate_imag_range = np.linspace(
+            imag_range_min, imag_range_max, 200
+        )
+
+        root_search_field = np.zeros(
+            (np.size(root_estimate_real_range),
+             np.size(root_estimate_imag_range)),
+            dtype=np.complex128
+        )
+
+        for real_idx, real_part in enumerate(root_estimate_real_range):
+            for imag_idx, imag_part in enumerate(root_estimate_imag_range):
+                root_estimate = complex(real_part, imag_part)
+                func_value = modal_equation_hybrid(
+                    root_estimate, freq, permittivity, wvg_diameter,
+                    mode, mode_n
+                )
+                root_search_field[real_idx, imag_idx] = 1 / func_value
+
+        pole_index = np.unravel_index(
+            np.argmax(root_search_field), root_search_field.shape
+        )
+
+        root_estimate = complex(
+            root_estimate_real_range[pole_index[0]],
+            root_estimate_imag_range[pole_index[1]]
+        )
+        root_estimate = np.complex128(root_estimate)
+
+        root_exact, root_result = newton(
+            modal_equation_hybrid,
+            x0=root_estimate,
+            args=(freq, permittivity, wvg_diameter, mode, mode_n),
+            full_output=True
+        )
+
+    else:
+        raise ValueError("Unknown mode specified")
+
+    if not root_result.converged:
+        warnings.warn("Newton solver not converged",
+                      category=RuntimeWarning)
+
+    mode_wavelength = root_exact / wvg_radius
+
+    prop_constant = root_to_prop_const(freq, mode_wavelength)
+
+    return prop_constant
 
 
 def check_electrical_size(freq: float, wvg_diameter: float,
