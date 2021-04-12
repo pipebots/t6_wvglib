@@ -41,25 +41,51 @@ pp. 173–174, Mar. 1969, doi: 10.1109/TMTT.1969.1126923
 
 The steps to follow are:
     1. Pick a mode
-    2. Estimate roots for that particular mode
-    3. Find exact roots for that particular mode
-    4. Derive propagation constant from exact roots
+    2. Estimate roots for that particular mode using high-frequency
+       approximation
+    3. Find the exact roots for that particular mode using a numerical solver
+    4. Derive the propagation constants from the exact roots
+
+In the above, the term `root` refers to solutions to a particular modal
+characteristic equation.
 """
 
 import warnings
 from typing import Tuple
-import numpy as np
-from numpy.lib.type_check import real
-import scipy.special
-from scipy.optimize import newton, brute, fmin
-from scipy.constants import speed_of_light
 
+import numpy as np
+import scipy.special
+from scipy.constants import speed_of_light
+from scipy.optimize import newton
 
 np.seterr(divide='raise')
 
 
 def estimate_roots_te(freq: float, wvg_diameter: float,
                       real_permittivity: float, mode_m: int) -> complex:
+    """Estimate root position for a TE0m mode
+
+    Uses the high-frequency approximation to find an initial estimate for
+    a root to the modal equation for a TE0m mode. This is used subsequently
+    in the numerical solution for the propagation constant.
+
+    Args:
+        freq: A `float` with the frequency of interest. Units are GHz.
+        wvg_diameter: A `float` with the diameter of the waveguide. Units are
+                      metres.
+        real_permittivity: A `float` with the real part of the complex relative
+                           permittivity of the material surrounding the
+                           waveguide
+        mode_m: An `int` with the mode index of interest. Must be >= 1.
+
+    Returns:
+        A single `complex` number containing the approximate position of the
+        root in the lambda-plane.
+
+    Raises:
+        ZeroDivisionError: In case the `freq` parameter is given as zero
+    """
+
     wvg_radius = wvg_diameter / 2
 
     try:
@@ -82,6 +108,31 @@ def estimate_roots_te(freq: float, wvg_diameter: float,
 def estimate_roots_tm(freq: float, wvg_diameter: float,
                       real_permittivity: float,
                       mode_m: int) -> Tuple[complex, complex, bool]:
+    """Estimate root position for a TM0m mode
+
+    Uses the high-frequency approximation to find an initial estimate for
+    a root to the modal equation for a TM0m mode. This is used subsequently
+    in the numerical solution for the propagation constant.
+
+    Args:
+        freq: A `float` with the frequency of interest. Units are GHz.
+        wvg_diameter: A `float` with the diameter of the waveguide. Units are
+                      metres.
+        real_permittivity: A `float` with the real part of the complex relative
+                           permittivity of the material surrounding the
+                           waveguide
+        mode_m: An `int` with the mode index of interest. Must be >= 1.
+
+    Returns:
+        Unlike the TE0m case, the TM0m root estimate returns two possible
+        values plus a boolean check for the validity of the approximation.
+        In practice, supplying both to the numerical solver improves
+        performance.
+
+    Raises:
+        ZeroDivisionError: In case the `freq` parameter is given as zero
+    """
+
     wvg_radius = wvg_diameter / 2
 
     try:
@@ -113,6 +164,25 @@ def estimate_roots_tm(freq: float, wvg_diameter: float,
 
 
 def estimate_roots_hybrid(mode: str, mode_n: int, mode_m: int) -> float:
+    """Estimate root position for a hybrid EH/HE mods
+
+    Uses the high-frequency approximation to find an initial estimate for
+    the real part of a root to the modal equation for an EH/HE mode.
+    This is used subsequently in the numerical solution for the propagation
+    constant.
+
+    Args:
+        mode_n: An `int` with the first mode index of interest. Must be >= 1.
+        mode_m: An `int` with the second mode index of interest. Must be >= 1.
+
+    Returns:
+        A single `complex` number containing the approximate position of the
+        root in the lambda-plane.
+
+    Raises:
+        Nothing
+    """
+
     if 0 == mode_n or 0 == mode_m:
         raise ValueError("Hybrid modes cannot have a zero index")
 
@@ -127,6 +197,25 @@ def estimate_roots_hybrid(mode: str, mode_n: int, mode_m: int) -> float:
 
 
 def root_to_prop_const(freq: float, mode_wavelength: complex) -> complex:
+    """Calculates propagation constant from modal equation root
+
+    This is used to move from the lambda (mode wavelength) to the gamma
+    (mode propagation constant) plane.
+
+    Args:
+        freq: A `float` with the frequency of interest. Units are GHz.
+        mode_wavelength: A `complex` number containing the mode
+                         wavelength from the numerical solver.
+
+    Returns:
+        The mode propagation constant in the form `alpha + j * beta`, where
+        `alpha` is the attenuation rate in Np/m and `beta` is the phase
+        constant in `rad/m`.
+
+    Raises:
+        ZeroDivisionError: In case the `freq` parameter is given as zero.
+    """
+
     try:
         wavelength = speed_of_light / (freq * 1e9)
     except ZeroDivisionError as error:
@@ -145,6 +234,41 @@ def root_to_prop_const(freq: float, mode_wavelength: complex) -> complex:
 def modal_equation_te_tm(root_estimate: complex, freq: float,
                          permittivity: complex, wvg_diameter: float,
                          mode: str, mode_n: int = 0) -> complex:
+    """Modal equation for TE0m and TM0m modes
+
+    Implements the modal equation for TE0m and TM0m modes. Also used for
+    EH/HE modes. Used by `calc_propagation_constant_exact` to numerically
+    find the roots, and therefore propagation constants, for a specified mode.
+
+    Notes:
+        1. The imaginary part of the complex relative permittivity should have
+        a negative sign pre-applied before being passed as an argument to this
+        function.
+
+    Args:
+        root_estimate: A `complex` number with an estimate for the root. Can
+                       also be an arbitrary value if evaluating the equation
+                       over a field of values.
+        freq: A `float` with the frequency of interest. Units are GHz.
+        permittivity: A `complex` number with the relative permittivity of the
+                      material surrounding the waveguide.
+        wvg_diameter: A `float` with the diameter of the waveguide. Units are
+                      metres
+        mode: A `str` with the mode of interest, i.e. TE or TM.
+        mode_n: An `int` with the first mode index. It is 0 by default for the
+                TE and TM modes, however can be 1 or greater if this is used
+                for the hybrid HE/EH modes.
+
+    Returns:
+        A `complex` number with the value of the modal equation for the given
+        root estimate.
+
+    Raises:
+        ValueError: If a mode different than TE or TM is specified
+    """
+
+    # * The only difference in the modal equation betweeh TE and TM modes is
+    # * a single multiplier for one of the fractions
     if "tm" == mode.lower():
         mode_multiplier = permittivity
     elif "te" == mode.lower():
@@ -181,8 +305,43 @@ def modal_equation_te_tm(root_estimate: complex, freq: float,
 def modal_equation_hybrid(root_estimate: complex, freq: float,
                           permittivity: complex, wvg_diameter: float,
                           mode: str, mode_n: int = 1) -> complex:
+    """Modal equation for HE and EH modes
+
+    Implements the modal equation for HE and EH modes. Uses the function
+    for TE and TM modes internally. Used by `calc_propagation_constant_exact`
+    to numerically find the roots, and therefore propagation constants,
+    for a specified mode.
+
+    Notes:
+        1. The imaginary part of the complex relative permittivity should have
+        a negative sign pre-applied before being passed as an argument to this
+        function.
+        2. The notation `q1`, `q2`, and `q5` are taken from the paper on
+        which this is based, [2].
+
+    Args:
+        root_estimate: A `complex` number with an estimate for the root. Can
+                       also be an arbitrary value if evaluating the equation
+                       over a field of values.
+        freq: A `float` with the frequency of interest. Units are GHz.
+        permittivity: A `complex` number with the relative permittivity of the
+                      material surrounding the waveguide.
+        wvg_diameter: A `float` with the diameter of the waveguide. Units are
+                      metres
+        mode: A `str` with the mode of interest, i.e. TE or TM.
+        mode_n: An `int` with the first mode index. It is 1 by default, however
+                in general it needs to be  1 or greater.
+
+    Returns:
+        A `complex` number with the value of the modal equation for the given
+        root estimate.
+
+    Raises:
+        ValueError: If a mode different than HE or EH is specified
+    """
+
     if "he" != mode.lower() and "eh" != mode.lower():
-        raise ValueError("Mode must be TE or TM")
+        raise ValueError("Mode must be HE or EH")
 
     wvg_radius = wvg_diameter / 2
     wave_number = (2 * np.pi * freq * 1e9) / speed_of_light
@@ -220,6 +379,42 @@ def calc_propagation_constant_exact(freq: float, wvg_diameter: float,
                                     mode_n: int, mode_m: int,
                                     imag_range_min: float = 0.2,
                                     imag_range_max: float = 2.0) -> complex:
+    """Main function for electrically small lossy waveguides
+
+    Combines other functions in this module to calculate the propagation
+    constant for a particular mode of interest at a particular frequency of
+    interest for a given combination of waveguide diameter and surrounding
+    dielectric material. Uses a numerical solver to find the root.
+
+    Notes:
+        1. The imaginary part of the complex relative permittivity should have
+        a negative sign pre-applied before being passed as an argument to this
+        function.
+
+    Args:
+        freq: A `float` with the frequency of interest. Units are GHz.
+        wvg_diameter: A `float` with the diameter of the waveguide. Units are
+                      metres.
+        permittivity: A `complex` number with the relative permittivity of the
+                      material surrounding the waveguide
+        mode: A `str` with the mode of interest. Must be TE, TM, HE, or EH.
+        mode_n: An `int` with the first mode index. Ignored in the case of
+                TE or TM modes.
+        mode_m: An `int` with the second mode index. Must be >= 1.
+        imag_range_min: Used in the search for approximate root positions for
+                        the hybrid modes. Defaults to 0.2.
+        imag_range_max: Used in the search for approximate root positions for
+                        the hybrid modes. Defaults to 2.0.
+
+    Raises:
+        ValueError: If a mode different than TE, TM, HE, or EH is specified.
+
+    Returns:
+        The mode propagation constant for the specified mode in the form
+        `alpha + j * beta`, where `alpha` is the attenuation rate in Np/m
+        and `beta` is the phase constant in `rad/m`.
+    """
+
     wvg_radius = wvg_diameter / 2.0
 
     if "te" == mode.lower():
@@ -238,6 +433,8 @@ def calc_propagation_constant_exact(freq: float, wvg_diameter: float,
             freq, wvg_diameter, permittivity.real, mode_m
         )
 
+        # * We provide both estimates to the numerical solver to increase
+        # * speed and accuracy.
         root_exact, root_result = newton(
             modal_equation_te_tm,
             x0=root_estimate_1, x1=root_estimate_2,
@@ -248,6 +445,11 @@ def calc_propagation_constant_exact(freq: float, wvg_diameter: float,
     elif "eh" == mode.lower() or "he" == mode.lower():
         root_estimate_real = estimate_roots_hybrid(mode, mode_n, mode_m)
 
+        # ! The `estimate_roots_hybrid` function provides an estimate for the
+        # ! real part only. We have to manually build a search field in a
+        # ! complex plane, over which we evaluate the reciprocal of the modal
+        # ! equation. The position of the maximum is our new root esimate,
+        # ! which is passed to the numeric solver.
         root_estimate_real_range = np.linspace(
             root_estimate_real*0.9, root_estimate_real*1.1,
             200
@@ -280,6 +482,8 @@ def calc_propagation_constant_exact(freq: float, wvg_diameter: float,
             root_estimate_real_range[pole_index[0]],
             root_estimate_imag_range[pole_index[1]]
         )
+        # ! The numeric solver does not work with the built-in `complex` type,
+        # ! so we convert it to the one defined by NumPy.
         root_estimate = np.complex128(root_estimate)
 
         root_exact, root_result = newton(
